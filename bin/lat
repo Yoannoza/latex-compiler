@@ -1,0 +1,450 @@
+#!/bin/bash
+
+# =====================================================================
+# LAT - Modern LaTeX Toolkit
+# =====================================================================
+# A complete LaTeX development environment with AI-powered review.
+# https://github.com/Yoannoza/latex-compiler
+# =====================================================================
+
+set -e
+
+# Configuration
+MAIN_FILE="main"
+BUILD_DIR="build"
+LOG_FILE="compilation.log"
+OPEN_PDF=false
+USE_LATEXMK=true
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# =====================================================================
+# UI
+# =====================================================================
+
+print_header() {
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║            ${CYAN}${BOLD}LAT${NC}${BLUE} - LaTeX Toolkit                 ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_step() { echo -e "${CYAN}→${NC} $1"; }
+print_success() { echo -e "${GREEN}✓${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
+print_warning() { echo -e "${YELLOW}!${NC} $1"; }
+print_info() { echo -e "${PURPLE}ℹ${NC} $1"; }
+
+# =====================================================================
+# UTILITIES
+# =====================================================================
+
+check_dependencies() {
+    local missing=()
+    command -v pdflatex >/dev/null 2>&1 || missing+=("pdflatex")
+    
+    if [ "$USE_LATEXMK" = true ]; then
+        command -v latexmk >/dev/null 2>&1 || {
+            print_warning "latexmk not found, using manual mode"
+            USE_LATEXMK=false
+        }
+    fi
+    
+    if [ ${#missing[@]} -ne 0 ]; then
+        print_error "Missing dependencies: ${missing[*]}"
+        echo ""
+        echo "Run 'lat install' to install LaTeX on your system."
+        exit 1
+    fi
+}
+
+extract_errors() {
+    local log="$BUILD_DIR/$MAIN_FILE.log"
+    if [ -f "$log" ]; then
+        echo ""
+        print_info "Errors found:"
+        grep -A 2 "^!" "$log" 2>/dev/null | head -20 || true
+    fi
+}
+
+extract_warnings() {
+    local log="$BUILD_DIR/$MAIN_FILE.log"
+    if [ -f "$log" ]; then
+        local count=$(grep -c "Warning" "$log" 2>/dev/null || echo "0")
+        if [ "$count" -gt 0 ]; then
+            print_warning "$count warning(s) - check $log for details"
+        fi
+    fi
+}
+
+detect_document_type() {
+    local file="$1"
+    if grep -q "\\\\documentclass.*{thesis}" "$file" 2>/dev/null; then
+        echo "thesis"
+    elif grep -q "\\\\documentclass.*{beamer}" "$file" 2>/dev/null; then
+        echo "beamer"
+    elif grep -q "\\\\documentclass.*{report}" "$file" 2>/dev/null; then
+        echo "report"
+    else
+        echo "article"
+    fi
+}
+
+# =====================================================================
+# ACTIONS
+# =====================================================================
+
+install_latex() {
+    print_step "Detecting operating system..."
+    
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if command -v apt >/dev/null 2>&1; then
+            print_step "Installing LaTeX on Debian/Ubuntu..."
+            sudo apt update
+            sudo apt install -y texlive-full latexmk chktex
+        elif command -v dnf >/dev/null 2>&1; then
+            print_step "Installing LaTeX on Fedora..."
+            sudo dnf install -y texlive-scheme-full latexmk chktex
+        elif command -v pacman >/dev/null 2>&1; then
+            print_step "Installing LaTeX on Arch..."
+            sudo pacman -S --noconfirm texlive-most latexmk chktex
+        else
+            print_error "Unsupported Linux distribution"
+            exit 1
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        print_step "Installing LaTeX on macOS..."
+        if ! command -v brew >/dev/null 2>&1; then
+            print_error "Homebrew required. Install from https://brew.sh"
+            exit 1
+        fi
+        brew install --cask mactex-no-gui
+        brew install latexmk chktex
+    else
+        print_error "Unsupported OS. Use Windows installer (install.ps1)"
+        exit 1
+    fi
+    
+    print_success "LaTeX installation complete!"
+}
+
+clean_build() {
+    print_step "Cleaning..."
+    rm -rf "$BUILD_DIR" *.pdf "$LOG_FILE" 2>/dev/null || true
+    print_success "Clean complete"
+}
+
+lint_document() {
+    print_step "Linting $MAIN_FILE.tex..."
+    if command -v chktex >/dev/null 2>&1; then
+        chktex -q "$MAIN_FILE.tex" 2>/dev/null || true
+        print_success "Lint complete"
+    else
+        print_error "chktex not installed. Run 'lat install'"
+        exit 1
+    fi
+}
+
+compile_latexmk() {
+    print_step "Compiling with latexmk..."
+    mkdir -p "$BUILD_DIR"
+    
+    if latexmk -pdf -interaction=nonstopmode \
+               -output-directory="$BUILD_DIR" \
+               "$MAIN_FILE.tex" > "$LOG_FILE" 2>&1; then
+        cp "$BUILD_DIR/$MAIN_FILE.pdf" . 2>/dev/null
+        return 0
+    else
+        return 1
+    fi
+}
+
+compile_manual() {
+    print_step "Compiling (manual mode)..."
+    mkdir -p "$BUILD_DIR"
+    
+    local OPTS="-interaction=nonstopmode -output-directory=$BUILD_DIR"
+    
+    pdflatex $OPTS "$MAIN_FILE.tex" >> "$LOG_FILE" 2>&1 || return 1
+    
+    if [ -f "$BUILD_DIR/$MAIN_FILE.aux" ]; then
+        bibtex "$BUILD_DIR/$MAIN_FILE" >> "$LOG_FILE" 2>&1 || true
+    fi
+    
+    if command -v makeglossaries >/dev/null 2>&1 && [ -f "$BUILD_DIR/$MAIN_FILE.glo" ]; then
+        makeglossaries -d "$BUILD_DIR" "$MAIN_FILE" >> "$LOG_FILE" 2>&1 || true
+    fi
+    
+    pdflatex $OPTS "$MAIN_FILE.tex" >> "$LOG_FILE" 2>&1 || true
+    pdflatex $OPTS "$MAIN_FILE.tex" >> "$LOG_FILE" 2>&1 || return 1
+    
+    cp "$BUILD_DIR/$MAIN_FILE.pdf" . 2>/dev/null
+}
+
+open_pdf() {
+    if [ -f "$MAIN_FILE.pdf" ]; then
+        print_info "Opening $MAIN_FILE.pdf..."
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$MAIN_FILE.pdf" >/dev/null 2>&1 &
+        elif command -v open >/dev/null 2>&1; then
+            open "$MAIN_FILE.pdf"
+        fi
+    fi
+}
+
+# =====================================================================
+# AI REVIEW
+# =====================================================================
+
+review_document() {
+    local doc_type="$1"
+    
+    if [ -z "$GEMINI_API_KEY" ]; then
+        print_error "GEMINI_API_KEY environment variable not set"
+        echo ""
+        echo "Get your API key from: https://makersuite.google.com/app/apikey"
+        echo "Then run: export GEMINI_API_KEY='your-key-here'"
+        exit 1
+    fi
+    
+    if [ ! -f "$MAIN_FILE.tex" ]; then
+        print_error "File $MAIN_FILE.tex not found"
+        exit 1
+    fi
+    
+    # Auto-detect document type if not specified
+    if [ -z "$doc_type" ]; then
+        doc_type=$(detect_document_type "$MAIN_FILE.tex")
+    fi
+    
+    print_step "Analyzing $MAIN_FILE.tex as '$doc_type'..."
+    
+    # Read document content
+    local content=$(cat "$MAIN_FILE.tex")
+    
+    # Create review prompt based on document type
+    local prompt
+    case "$doc_type" in
+        thesis)
+            prompt="You are a LaTeX expert and academic writing advisor. Review this thesis/dissertation LaTeX document and provide specific, actionable recommendations for:
+1. Document structure and chapter organization
+2. Citation and bibliography best practices
+3. Academic writing tone and clarity
+4. LaTeX formatting improvements
+5. Common thesis mistakes to avoid
+
+Be concise and practical. Format as a numbered list."
+            ;;
+        beamer)
+            prompt="You are a LaTeX expert and presentation design advisor. Review this Beamer presentation and provide specific recommendations for:
+1. Slide density (too much/too little content per slide)
+2. Visual clarity and readability
+3. Beamer-specific improvements (themes, transitions)
+4. Presentation flow and structure
+5. Common presentation mistakes
+
+Be concise and practical. Format as a numbered list."
+            ;;
+        report)
+            prompt="You are a LaTeX expert and technical writing advisor. Review this report and provide specific recommendations for:
+1. Executive summary effectiveness
+2. Section organization and flow
+3. Figures and tables usage
+4. Technical clarity
+5. Professional formatting
+
+Be concise and practical. Format as a numbered list."
+            ;;
+        *)
+            prompt="You are a LaTeX expert. Review this document and provide specific recommendations for:
+1. Document structure
+2. Writing clarity
+3. LaTeX best practices
+4. Formatting improvements
+5. Common mistakes to fix
+
+Be concise and practical. Format as a numbered list."
+            ;;
+    esac
+    
+    # Escape content for JSON
+    local escaped_content=$(echo "$content" | jq -Rs .)
+    local escaped_prompt=$(echo "$prompt" | jq -Rs .)
+    
+    # Build request
+    local request=$(cat <<EOF
+{
+  "contents": [{
+    "parts": [{
+      "text": $escaped_prompt
+    }, {
+      "text": "Here is the LaTeX document to review:\n\n"
+    }, {
+      "text": $escaped_content
+    }]
+  }],
+  "generationConfig": {
+    "temperature": 0.7,
+    "maxOutputTokens": 2048
+  }
+}
+EOF
+)
+    
+    # Call Gemini API
+    local response=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$GEMINI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$request")
+    
+    # Check for errors
+    if echo "$response" | grep -q '"error"'; then
+        print_error "API Error:"
+        echo "$response" | jq -r '.error.message // .error' 2>/dev/null || echo "$response"
+        exit 1
+    fi
+    
+    # Extract and display review
+    echo ""
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  AI Review - Document Type: ${YELLOW}$doc_type${NC}"
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
+    echo ""
+    
+    echo "$response" | jq -r '.candidates[0].content.parts[0].text // "No response received"' 2>/dev/null
+    
+    echo ""
+    print_success "Review complete"
+}
+
+# =====================================================================
+# MAIN
+# =====================================================================
+
+show_help() {
+    echo "Usage: lat [COMMAND] [OPTIONS]"
+    echo ""
+    echo "Commands:"
+    echo "  (default)       Compile the document"
+    echo "  install         Install LaTeX on your system"
+    echo "  clean           Remove build artifacts"
+    echo "  lint            Check for LaTeX errors and style"
+    echo "  review          AI-powered document review (requires GEMINI_API_KEY)"
+    echo ""
+    echo "Options:"
+    echo "  -f, --file NAME   Set main file (default: main.tex)"
+    echo "  -o, --open        Open PDF after successful build"
+    echo "  -t, --type TYPE   Document type for review (thesis|article|report|beamer)"
+    echo "  -m, --manual      Force manual compilation mode"
+    echo "  -h, --help        Show this help"
+    echo "  -v, --version     Show version"
+    echo ""
+    echo "Examples:"
+    echo "  lat                     # Compile main.tex"
+    echo "  lat -f thesis -o        # Compile thesis.tex and open"
+    echo "  lat review              # AI review with auto-detection"
+    echo "  lat review -t thesis    # AI review as thesis"
+    echo "  lat install             # Install LaTeX"
+}
+
+show_version() {
+    echo "lat v2.0.0"
+}
+
+# Argument parsing
+MODE="compile"
+DOC_TYPE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        install|clean|lint|review)
+            MODE="$1"
+            shift
+            ;;
+        -f|--file)
+            MAIN_FILE="${2%.tex}"
+            shift 2
+            ;;
+        -o|--open)
+            OPEN_PDF=true
+            shift
+            ;;
+        -t|--type)
+            DOC_TYPE="$2"
+            shift 2
+            ;;
+        -m|--manual)
+            USE_LATEXMK=false
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -v|--version)
+            show_version
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# Execute
+print_header
+
+case "$MODE" in
+    install)
+        install_latex
+        ;;
+    clean)
+        clean_build
+        ;;
+    lint)
+        if [ ! -f "$MAIN_FILE.tex" ]; then
+            print_error "File $MAIN_FILE.tex not found"
+            exit 1
+        fi
+        lint_document
+        ;;
+    review)
+        review_document "$DOC_TYPE"
+        ;;
+    compile)
+        check_dependencies
+        
+        if [ ! -f "$MAIN_FILE.tex" ]; then
+            print_error "File $MAIN_FILE.tex not found"
+            exit 1
+        fi
+        
+        echo "=== $(date) ===" > "$LOG_FILE"
+        
+        SUCCESS=false
+        if [ "$USE_LATEXMK" = true ]; then
+            compile_latexmk && SUCCESS=true
+        else
+            compile_manual && SUCCESS=true
+        fi
+        
+        if [ "$SUCCESS" = true ]; then
+            print_success "Build complete: $MAIN_FILE.pdf"
+            extract_warnings
+            [ "$OPEN_PDF" = true ] && open_pdf
+        else
+            print_error "Build failed"
+            extract_errors
+            exit 1
+        fi
+        ;;
+esac
