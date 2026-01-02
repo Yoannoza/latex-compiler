@@ -210,7 +210,7 @@ review_document() {
     if [ -z "$GEMINI_API_KEY" ]; then
         print_error "GEMINI_API_KEY environment variable not set"
         echo ""
-        echo "Get your API key from: https://makersuite.google.com/app/apikey"
+        echo "Get your API key from: ai.dev"
         echo "Then run: export GEMINI_API_KEY='your-key-here'"
         exit 1
     fi
@@ -219,106 +219,88 @@ review_document() {
         print_error "File $MAIN_FILE.tex not found"
         exit 1
     fi
+
+    # 1. Compile to ensure PDF is fresh
+    print_step "Compiling document for review..."
+    if ! "$0" > /dev/null 2>&1; then
+        print_warning "Compilation had warnings/errors, but trying to review anyway..."
+    fi
+
+    local pdf_file="$MAIN_FILE.pdf"
+    if [ ! -f "$pdf_file" ]; then
+        print_error "Could not generate PDF for review."
+        exit 1
+    fi
     
     # Auto-detect document type if not specified
     if [ -z "$doc_type" ]; then
         doc_type=$(detect_document_type "$MAIN_FILE.tex")
     fi
     
-    print_step "Analyzing $MAIN_FILE.tex as '$doc_type'..."
+    print_step "Encoding and Sending $pdf_file to Gemini ($doc_type)..."
     
-    # Read document content
-    local content=$(cat "$MAIN_FILE.tex")
+    # 2. Base64 encode the PDF
+    local B64FLAGS="-w0"
+    if [[ "$(base64 --version 2>&1)" = *"FreeBSD"* ]]; then
+        B64FLAGS="--input"
+    fi
+    local ENCODED_PDF=$(base64 $B64FLAGS "$pdf_file")
     
-    # Create review prompt based on document type
+    # 3. Create review prompt
     local prompt
     case "$doc_type" in
-        thesis)
-            prompt="You are a LaTeX expert and academic writing advisor. Review this thesis/dissertation LaTeX document and provide specific, actionable recommendations for:
-1. Document structure and chapter organization
-2. Citation and bibliography best practices
-3. Academic writing tone and clarity
-4. LaTeX formatting improvements
-5. Common thesis mistakes to avoid
-
-Be concise and practical. Format as a numbered list."
-            ;;
-        beamer)
-            prompt="You are a LaTeX expert and presentation design advisor. Review this Beamer presentation and provide specific recommendations for:
-1. Slide density (too much/too little content per slide)
-2. Visual clarity and readability
-3. Beamer-specific improvements (themes, transitions)
-4. Presentation flow and structure
-5. Common presentation mistakes
-
-Be concise and practical. Format as a numbered list."
-            ;;
-        report)
-            prompt="You are a LaTeX expert and technical writing advisor. Review this report and provide specific recommendations for:
-1. Executive summary effectiveness
-2. Section organization and flow
-3. Figures and tables usage
-4. Technical clarity
-5. Professional formatting
-
-Be concise and practical. Format as a numbered list."
-            ;;
-        *)
-            prompt="You are a LaTeX expert. Review this document and provide specific recommendations for:
-1. Document structure
-2. Writing clarity
-3. LaTeX best practices
-4. Formatting improvements
-5. Common mistakes to fix
-
-Be concise and practical. Format as a numbered list."
-            ;;
+        thesis) prompt="Review this academic thesis PDF for structure, depth of analysis, citation consistency, and formal tone." ;;
+        beamer) prompt="Review this presentation PDF for slide clarity, content density, visual balance, and effective use of space." ;;
+        report) prompt="Review this technical report PDF for executive clarity, section logical flow, and professional formatting." ;;
+        *)      prompt="Review this document PDF and provide recommendations for structure, clarity, and LaTeX formatting best practices." ;;
     esac
-    
-    # Escape content for JSON
-    local escaped_content=$(echo "$content" | jq -Rs .)
-    local escaped_prompt=$(echo "$prompt" | jq -Rs .)
-    
-    # Build request
+    prompt="$prompt Provide specific, actionable feedback as a numbered list."
+
+    # 4. Build request and call API
     local request=$(cat <<EOF
 {
   "contents": [{
-    "parts": [{
-      "text": $escaped_prompt
-    }, {
-      "text": "Here is the LaTeX document to review:\n\n"
-    }, {
-      "text": $escaped_content
-    }]
+    "parts": [
+      {"inline_data": {"mime_type": "application/pdf", "data": "$ENCODED_PDF"}},
+      {"text": "$prompt"}
+    ]
   }],
   "generationConfig": {
-    "temperature": 0.7,
+    "temperature": 0.4,
     "maxOutputTokens": 2048
   }
 }
 EOF
-)
+) 
     
-    # Call Gemini API
-    local response=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$GEMINI_API_KEY" \
+    local response=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
         -d "$request")
     
     # Check for errors
     if echo "$response" | grep -q '"error"'; then
         print_error "API Error:"
-        echo "$response" | jq -r '.error.message // .error' 2>/dev/null || echo "$response"
+        if command -v jq >/dev/null 2>&1; then
+            echo "$response" | jq -r '.error.message // .error'
+        else
+            echo "$response"
+        fi
         exit 1
     fi
     
-    # Extract and display review
+    # 5. Display Review
     echo ""
     echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
     echo -e "${BOLD}  AI Review - Document Type: ${YELLOW}$doc_type${NC}"
     echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
     echo ""
     
-    echo "$response" | jq -r '.candidates[0].content.parts[0].text // "No response received"' 2>/dev/null
+    if command -v jq >/dev/null 2>&1; then
+        echo "$response" | jq -r '.candidates[0].content.parts[0].text // "No response received"'
+    else
+        # Fallback if jq is missing (though it should be installed)
+        echo "$response" | grep -oP '"text":\s*"\K[^"]+' | sed 's/\\n/\n/g'
+    fi
     
     echo ""
     print_success "Review complete"

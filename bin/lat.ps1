@@ -201,7 +201,7 @@ function Invoke-Review {
     if (-not $apiKey) {
         Write-Error "GEMINI_API_KEY environment variable not set"
         Write-Host ""
-        Write-Host "Get your API key from: https://makersuite.google.com/app/apikey"
+        Write-Host "Get your API key from: ai.dev"
         Write-Host 'Then run: $env:GEMINI_API_KEY = "your-key-here"'
         exit 1
     }
@@ -210,39 +210,53 @@ function Invoke-Review {
         Write-Error "File $MAIN_FILE.tex not found"
         exit 1
     }
+
+    # 1. Compile to ensure PDF is fresh
+    Write-Step "Compiling document for review..."
+    # We run the command via the current script
+    & $PSCommandPath "$MAIN_FILE" | Out-Null
+
+    $pdfPath = Join-Path (Get-Location) "$MAIN_FILE.pdf"
+    if (-not (Test-Path $pdfPath)) {
+        Write-Error "Could not generate PDF for review."
+        exit 1
+    }
     
     # Auto-detect document type
     if (-not $DocType) {
         $DocType = Get-DocumentType "$MAIN_FILE.tex"
     }
     
-    Write-Step "Analyzing $MAIN_FILE.tex as '$DocType'..."
+    Write-Step "Encoding and Sending $MAIN_FILE.pdf to Gemini ($DocType)..."
     
-    $content = Get-Content "$MAIN_FILE.tex" -Raw
+    # 2. Base64 encode the PDF
+    $pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    $encodedPdf = [Convert]::ToBase64String($pdfBytes)
     
-    # Create prompt based on type
+    # 3. Create prompt based on type
     $prompt = switch ($DocType) {
-        "thesis" { "You are a LaTeX expert. Review this thesis for structure, citations, and academic tone. Be concise, use a numbered list." }
-        "beamer" { "You are a LaTeX expert. Review this presentation for slide density, visual clarity, and flow. Be concise, use a numbered list." }
-        "report" { "You are a LaTeX expert. Review this report for structure, clarity, and formatting. Be concise, use a numbered list." }
-        default { "You are a LaTeX expert. Review this document for structure, clarity, and LaTeX best practices. Be concise, use a numbered list." }
+        "thesis" { "Review this academic thesis PDF for structure, depth of analysis, citation consistency, and formal tone." }
+        "beamer" { "Review this presentation PDF for slide clarity, content density, visual balance, and effective use of space." }
+        "report" { "Review this technical report PDF for executive clarity, section logical flow, and professional formatting." }
+        default  { "Review this document PDF and provide recommendations for structure, clarity, and LaTeX formatting best practices." }
     }
+    $prompt += " Provide specific, actionable feedback as a numbered list."
     
     $body = @{
         contents = @(@{
             parts = @(
-                @{ text = $prompt },
-                @{ text = "Document to review:`n`n$content" }
+                @{ inline_data = @{ mime_type = "application/pdf"; data = $encodedPdf } },
+                @{ text = $prompt }
             )
         })
         generationConfig = @{
-            temperature = 0.7
+            temperature = 0.4
             maxOutputTokens = 2048
         }
     } | ConvertTo-Json -Depth 10
     
     try {
-        $response = Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$apiKey" `
+        $response = Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey" `
             -Method Post -Body $body -ContentType "application/json"
         
         Write-Host ""

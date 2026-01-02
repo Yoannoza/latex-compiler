@@ -59,7 +59,7 @@ Get intelligent feedback on your LaTeX documents using Gemini AI.
 
 ### Setup
 
-1. Get an API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+1. Get an API key from [Google AI Studio](ai.dev)
 2. Set the environment variable:
 
 ```bash
