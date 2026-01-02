@@ -44,7 +44,7 @@ fi
 # Ask about installing LaTeX
 echo ""
 echo -e "${CYAN}→${NC} Would you like to install LaTeX now? (y/n)"
-read -r response
+read -r response < /dev/tty
 if [[ "$response" =~ ^[Yy]$ ]]; then
     echo ""
     "$INSTALL_DIR/lat" install
