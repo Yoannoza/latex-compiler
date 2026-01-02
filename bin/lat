@@ -210,7 +210,7 @@ review_document() {
     if [ -z "$GEMINI_API_KEY" ]; then
         print_error "GEMINI_API_KEY environment variable not set"
         echo ""
-        echo "Get your API key from: ai.dev"
+        echo "Get your API key from: https://aistudio.google.com/"
         echo "Then run: export GEMINI_API_KEY='your-key-here'"
         exit 1
     fi

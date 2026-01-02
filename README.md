@@ -87,7 +87,7 @@ LAT integrates **Gemini 2.5 Flash** to provide intelligent, context-aware feedba
 
 ### Setup
 
-1. Get a free API key from [Google AI Studio](https://ai.google.dev/aistudio)
+1. Get a free API key from [Google AI Studio](https://aistudio.google.com/)
 2. Set the environment variable:
 
 ```bash
@@ -175,7 +175,7 @@ sudo dnf install latexmk
 **Problem**: AI review requires a Gemini API key.
 
 **Solution**:
-1. Get a free key from [Google AI Studio](https://ai.google.dev/aistudio)
+1. Get a free key from [Google AI Studio](https://aistudio.google.com/)
 2. Set the variable:
    ```bash
    # Temporary (current session only)
@@ -225,7 +225,7 @@ lat install    # Installs full LaTeX distribution for your platform
 **Problem**: Gemini API returns an error.
 
 **Common causes**:
-- Invalid API key → Double-check your key from [ai.google.dev](https://ai.google.dev)
+- Invalid API key → Double-check your key from [Google AI Studio](https://aistudio.google.com/)
 - Rate limits → Wait a few seconds and try again (free tier has limits)
 - PDF too large → Compress images or reduce document size
 
