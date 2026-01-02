@@ -257,7 +257,8 @@ review_document() {
     prompt="$prompt Provide specific, actionable feedback as a numbered list."
 
     # 4. Build request and call API
-    local request=$(cat <<EOF
+    local tmp_json=$(mktemp)
+    cat <<EOF > "$tmp_json"
 {
   "contents": [{
     "parts": [
@@ -271,11 +272,12 @@ review_document() {
   }
 }
 EOF
-) 
     
     local response=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
-        -d "$request")
+        -d @"$tmp_json")
+    
+    rm -f "$tmp_json"
     
     # Check for errors
     if echo "$response" | grep -q '"error"'; then
